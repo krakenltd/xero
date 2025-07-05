@@ -21,24 +21,13 @@ if not tenant_id:
         headers={"Authorization": f"Bearer {access_token}"},
     ).json()[0]["tenantId"]
 
-# ---------- 3. Add up inventory value from Veeqo ----------
-hdrs = {"x-api-key": os.environ["VEEQO_API_KEY"], "accept": "application/json"}
-total = decimal.Decimal("0")
-url = "https://api.veeqo.com/products?per_page=200&page=1"
+# ---------- 3. Get total stock value from Veeqo's report ----------
+report = requests.get(
+    "https://api.veeqo.com/reports/inventory_value",   # no location_id = all locations
+    headers={"x-api-key": os.environ["VEEQO_API_KEY"], "accept": "application/json"},
+).json()
 
-def safe_decimal(val):
-    """Return Decimal(val) or 0 if val is None/empty/invalid."""
-    try:
-        return decimal.Decimal(str(val))
-    except (decimal.InvalidOperation, TypeError, ValueError):
-        return decimal.Decimal("0")
-
-while url:
-    r = requests.get(url, headers=hdrs)
-    data = r.json()
-    total += sum(safe_decimal(p.get("on_hand_value")) for p in data)
-    url = r.links.get("next", {}).get("url")
-    time.sleep(0.3)  # stay under Veeqo’s rate limit
+total = decimal.Decimal(str(report["total_stock_value"]))
 
 # ---------- 4. Post the Manual Journal to Xero ----------
 today = time.strftime("%Y-%m-%d")
