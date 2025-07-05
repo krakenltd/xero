@@ -57,24 +57,40 @@ def diy_location_value(location_id):
     return total_loc
 
 total = Decimal("0")
-location_ids = os.environ["VEEQO_LOCATION_IDS"].split(",")  # e.g. 328835,124495
+location_ids = os.environ["VEEQO_LOCATION_IDS"].split(",")  # "328835,124495"
 
 for loc_id in location_ids:
     url = f"https://api.veeqo.com/reports/inventory_value?location_id={loc_id}"
     r = requests.get(url, headers=hdrs)
+
     if r.status_code == 200:
         data = r.json()
+
+        # ----- three ways Veeqo may wrap the number -----
         if "stock_value" in data:
             total += safe_decimal(data["stock_value"])
+
         elif "total_stock_value" in data:
             total += safe_decimal(data["total_stock_value"])
+
+        elif "data" in data and isinstance(data["data"], list) and data["data"]:
+            block = data["data"][0]             # first (only) row
+            if "stock_value" in block:
+                total += safe_decimal(block["stock_value"])
+            elif "total_stock_value" in block:
+                total += safe_decimal(block["total_stock_value"])
+            else:
+                print(f"Unrecognised keys in report for {loc_id}, using fallback.")
+                total += diy_location_value(loc_id)
+
         else:
-            # rare edge case – fallback too
+            print(f"Unrecognised structure for {loc_id}, using fallback.")
             total += diy_location_value(loc_id)
+
     elif r.status_code == 404:
-        # report not available → fallback
-        print(f"Report unavailable for location {loc_id}; falling back to product loop.")
+        print(f"Report unavailable for {loc_id}, using fallback.")
         total += diy_location_value(loc_id)
+
     else:
         r.raise_for_status()
 
