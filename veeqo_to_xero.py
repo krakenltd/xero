@@ -25,6 +25,11 @@ if not tenant_id:
 # ---------- 3.  Total stock value across ALL Veeqo locations ----------
 from decimal import Decimal, InvalidOperation
 
+hdrs = {                                # ← Add these three lines
+    "x-api-key": os.environ["VEEQO_API_KEY"],
+    "accept":    "application/json",
+}
+
 def safe_decimal(v):
     try:
         return Decimal(str(v))
