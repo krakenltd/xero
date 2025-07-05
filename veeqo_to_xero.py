@@ -20,46 +20,47 @@ tenant_id = os.getenv("XERO_TENANT_ID") or requests.get(
     headers={"Authorization": f"Bearer {access_token}"},
 ).json()[0]["tenantId"]
 
-# ---------- 3.  Total stock value via /stock_entries endpoint ----------
+# ---------- 3.  Total stock value = Σ(cost_price × qty_all_warehouses) ----------
 hdrs = {
     "x-api-key": os.environ["VEEQO_API_KEY"],
     "accept":    "application/json",
 }
 
-from decimal import Decimal, InvalidOperation
 def safe_decimal(v):
     try:
         return Decimal(str(v))
     except (InvalidOperation, TypeError, ValueError):
         return Decimal("0")
 
-def value_for_location(location_id: str) -> Decimal:
-    total_loc = Decimal("0")
-    url = f"https://api.veeqo.com/warehouses/{location_id}/stock_entries?per_page=200&page=1"
-    while url:
-        resp = requests.get(url, headers=hdrs)
-        resp.raise_for_status()
+total = Decimal("0")
+url = "https://api.veeqo.com/products?per_page=200&page=1"
 
-        # ---- DEBUG: show how many entries came back from stock_entries
-        print(f"[DEBUG] {location_id} page → {url}  entries → {len(resp.json())}")
+while url:
+    resp = requests.get(url, headers=hdrs)
+    resp.raise_for_status()
+    page = resp.json()
 
-        for entry in resp.json():
-            val = entry.get("sellable_on_hand_value")
-            if val not in (None, "", 0, "0", "0.0"):
-                total_loc += safe_decimal(val)
-        url = resp.links.get("next", {}).get("url")   # follow pagination
-    return total_loc
+    # ---- DEBUG: show how many products parsed on this page
+    print(f"[DEBUG] fetched {len(page)} products from → {url}")
 
-total = sum(
-    value_for_location(loc.strip())
-    for loc in os.environ["VEEQO_LOCATION_IDS"].split(",")
-)
+    for product in page:
+        for variant in product.get("sellables", []):
+            cost = safe_decimal(variant.get("cost_price") or 0)
+            qty  = safe_decimal(
+                variant.get("inventory", {}).get(
+                    "physical_stock_level_at_all_warehouses", 0
+                )
+            )
+            if cost > 0 and qty > 0:
+                total += cost * qty
+    url = resp.links.get("next", {}).get("url")
+    time.sleep(0.3)
 
-print(f"Total inventory across all locations = £{total}")
+print(f"Total inventory across all warehouses = £{total}")
+
 if total == 0:
     print("Inventory total is £0 – aborting run.")
     raise SystemExit(0)
-
 
 # ---------- 4.  Post the Manual Journal to Xero ----------
 today = time.strftime("%Y-%m-%d")
