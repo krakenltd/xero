@@ -1,7 +1,7 @@
 import os, requests, time
 from decimal import Decimal, InvalidOperation
 
-# ---------- 1.  Get a 30-min Xero access-token (client-credentials flow) ----------
+# ---------- 1. Get a 30-min Xero access token ----------
 token = requests.post(
     "https://identity.xero.com/connect/token",
     headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -14,21 +14,17 @@ token = requests.post(
 ).json()
 access_token = token["access_token"]
 
-# ---------- 2.  Tenant ID (read secret or fetch once) ----------
-tenant_id = os.getenv("XERO_TENANT_ID")
-if not tenant_id:
-    tenant_id = requests.get(
-        "https://api.xero.com/connections",
-        headers={"Authorization": f"Bearer {access_token}"},
-    ).json()[0]["tenantId"]
+# ---------- 2. Get tenant ID (once) ----------
+tenant_id = os.getenv("XERO_TENANT_ID") or requests.get(
+    "https://api.xero.com/connections",
+    headers={"Authorization": f"Bearer {access_token}"},
+).json()[0]["tenantId"]
 
-# ---------- 3.  Total stock value using stock_entries ----------
-hdrs = {                              #  ←  keep this near the top of the block
+# ---------- 3. Calculate total stock value (uses stock_entries endpoint) ----------
+hdrs = {
     "x-api-key": os.environ["VEEQO_API_KEY"],
     "accept":    "application/json",
 }
-
-from decimal import Decimal, InvalidOperation
 
 def safe_decimal(v):
     try:
@@ -36,46 +32,39 @@ def safe_decimal(v):
     except (InvalidOperation, TypeError, ValueError):
         return Decimal("0")
 
-def value_for_location(location_id):
+def value_for_location(loc_id: str) -> Decimal:
     total_loc = Decimal("0")
-    url = "https://api.veeqo.com/products?per_page=200&page=1&include[]=stock_entries"
+    url = f"https://api.veeqo.com/stock_entries?warehouse_id={loc_id}&per_page=200&page=1"
     while url:
         resp = requests.get(url, headers=hdrs)
         resp.raise_for_status()
-        for p in resp.json():
-            for entry in p.get("stock_entries", []):
-                if str(entry.get("warehouse_id")) == str(location_id):
-                    val = entry.get("sellable_on_hand_value")
-                    if val not in (None, "", 0, "0", "0.0"):
-                        total_loc += safe_decimal(val)
+        for entry in resp.json():
+            val = entry.get("sellable_on_hand_value")
+            if val not in (None, "", 0, "0", "0.0"):
+                total_loc += safe_decimal(val)
         url = resp.links.get("next", {}).get("url")
-        time.sleep(0.3)
     return total_loc
 
-total = Decimal("0")
-for loc_id in os.environ["VEEQO_LOCATION_IDS"].split(","):
-    total += value_for_location(loc_id)
+total = sum(
+    value_for_location(loc.strip())
+    for loc in os.environ["VEEQO_LOCATION_IDS"].split(",")
+)
 
 print(f"Total inventory across all locations = £{total}")
+
 if total == 0:
-    print("Inventory total is £0 – aborting run.")
-    raise SystemExit(0)
-
-
-# ---------- 4.  Abort if value is zero (prevents empty journal) ----------
-if total == Decimal("0"):
     print("Inventory total is £0 – no journal posted.")
     raise SystemExit(0)
 
-# ---------- 5.  Post the Manual Journal to Xero ----------
+# ---------- 4. Post the Manual Journal to Xero ----------
 today = time.strftime("%Y-%m-%d")
 journal = {
     "Narration": "Daily Veeqo stock revaluation",
     "Date": today,
     "Status": "POSTED",
     "JournalLines": [
-        {"AccountCode": "320", "LineAmount": float(total)},    # debit Stock-on-Hand
-        {"AccountCode": "630", "LineAmount": float(-total)},   # credit Adjustment
+        {"AccountCode": "320", "LineAmount": float(total)},   # Stock on Hand
+        {"AccountCode": "630", "LineAmount": float(-total)},  # Adjustment
     ],
 }
 
