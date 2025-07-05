@@ -23,6 +23,11 @@ if not tenant_id:
     ).json()[0]["tenantId"]
 
 # ---------- 3.  Total stock value using stock_entries ----------
+hdrs = {                              #  ←  keep this near the top of the block
+    "x-api-key": os.environ["VEEQO_API_KEY"],
+    "accept":    "application/json",
+}
+
 from decimal import Decimal, InvalidOperation
 
 def safe_decimal(v):
