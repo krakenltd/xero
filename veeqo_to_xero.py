@@ -65,6 +65,30 @@ if total == 0:
     print("Inventory total is £0 – no journal posted.")
     raise SystemExit(0)
 
+# ---------- 4a. Void yesterday’s copy of this journal (if it exists) ----------
+search = requests.get(
+    "https://api.xero.com/api.xro/2.0/ManualJournals",
+    headers={
+        "Authorization": f"Bearer {access_token}",
+        "xero-tenant-id": tenant_id,
+        "Accept": "application/json",
+    },
+    params={"where": f'Date==DateTime({today})&&Narration=="Daily Veeqo stock revaluation"'}
+).json()
+
+for mj in search.get("ManualJournals", []):
+    jid = mj["ManualJournalID"]
+    requests.post(
+        f"https://api.xero.com/api.xro/2.0/ManualJournals/{jid}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "xero-tenant-id": tenant_id,
+            "Accept": "application/json",
+        },
+        json={"Status": "VOIDED"}
+    )
+
+
 # ---------- 4.  Post the Manual Journal to Xero ----------
 today = time.strftime("%Y-%m-%d")
 journal = {
@@ -72,9 +96,9 @@ journal = {
     "Date": today,
     "Status": "POSTED",
     "JournalLines": [
-        {"AccountCode": "320", "LineAmount": float(total)},   # debit Stock-on-Hand
-        {"AccountCode": "630", "LineAmount": float(-total)},  # credit Adjustment
-    ],
+    {"AccountCode": "630", "LineAmount":  float(total)},   # debit Stock-on-Hand
+    {"AccountCode": "999", "LineAmount": -float(total)},   # credit Inventory Adj.
+],
 }
 
 resp = requests.post(
