@@ -21,13 +21,33 @@ if not tenant_id:
         headers={"Authorization": f"Bearer {access_token}"},
     ).json()[0]["tenantId"]
 
-# ---------- 3. Get total stock value from Veeqo's report ----------
-report = requests.get(
-    "https://api.veeqo.com/reports/inventory_value",   # no location_id = all locations
-    headers={"x-api-key": os.environ["VEEQO_API_KEY"], "accept": "application/json"},
-).json()
+# ---------- 3. Get total stock value from Veeqo ----------
+import decimal, requests, time, os
 
-total = decimal.Decimal(str(report["total_stock_value"]))
+def fetch_stock_value():
+    resp = requests.get(
+        "https://api.veeqo.com/reports/inventory_value",
+        headers={
+            "x-api-key": os.environ["VEEQO_API_KEY"],
+            "accept": "application/json",
+        },
+    ).json()
+
+    # Format 1:  {"total_stock_value": "9883.61", ...}
+    if "total_stock_value" in resp:
+        return decimal.Decimal(str(resp["total_stock_value"]))
+
+    # Format 2: {"data":[{"stock_value":"7888.81", ...}, ...]}
+    if "data" in resp and isinstance(resp["data"], list):
+        return sum(
+            decimal.Decimal(str(loc.get("stock_value") or 0))
+            for loc in resp["data"]
+        )
+
+    # Fallback – raise a helpful error
+    raise ValueError(f"Unexpected Veeqo report structure: {resp}")
+
+total = fetch_stock_value()
 
 # ---------- 4. Post the Manual Journal to Xero ----------
 today = time.strftime("%Y-%m-%d")
