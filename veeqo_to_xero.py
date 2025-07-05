@@ -20,7 +20,7 @@ tenant_id = os.getenv("XERO_TENANT_ID") or requests.get(
     headers={"Authorization": f"Bearer {access_token}"},
 ).json()[0]["tenantId"]
 
-# ---------- 3.  Total stock value = Σ(cost_price × qty_all_warehouses) ----------
+# ---------- 3.  Total stock value  = Σ(cost_price × qty_all_warehouses) ----------
 hdrs = {
     "x-api-key": os.environ["VEEQO_API_KEY"],
     "accept":    "application/json",
@@ -33,34 +33,36 @@ def safe_decimal(v):
         return Decimal("0")
 
 total = Decimal("0")
-url = "https://api.veeqo.com/products?per_page=200&page=1"
-
-while url:
+page = 1
+while True:
+    url = f"https://api.veeqo.com/products?per_page=200&page={page}"
     resp = requests.get(url, headers=hdrs)
     resp.raise_for_status()
-    print(f"[DEBUG] headers for {url} →", dict(resp.headers))
-    page = resp.json()
 
-    # ---- DEBUG: show how many products parsed on this page
-    print(f"[DEBUG] fetched {len(page)} products from → {url}")
+    # ---- DEBUG: show page / count ----
+    headers = resp.headers
+    total_pages = int(headers.get("X-Total-Pages-Count", 1))
+    print(f"[DEBUG] page {page}/{total_pages}  products on page → {len(resp.json())}")
 
-    for product in page:
+    for product in resp.json():
         for variant in product.get("sellables", []):
             cost = safe_decimal(variant.get("cost_price") or 0)
             qty  = safe_decimal(
-                variant.get("inventory", {}).get(
-                    "physical_stock_level_at_all_warehouses", 0
-                )
+                variant.get("inventory", {})
+                       .get("physical_stock_level_at_all_warehouses", 0)
             )
             if cost > 0 and qty > 0:
                 total += cost * qty
-    url = resp.links.get("next", {}).get("url")
-    time.sleep(0.3)
+
+    if page >= total_pages:
+        break
+    page += 1
+    time.sleep(0.3)        # stay below rate-limit
 
 print(f"Total inventory across all warehouses = £{total}")
 
 if total == 0:
-    print("Inventory total is £0 – aborting run.")
+    print("Inventory total is £0 – no journal posted.")
     raise SystemExit(0)
 
 # ---------- 4.  Post the Manual Journal to Xero ----------
