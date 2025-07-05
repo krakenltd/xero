@@ -1,0 +1,27 @@
+name: Veeqo → Xero stock sync
+
+on:
+  schedule:
+    - cron: '0 18 * * *'     # every day at 18:00 UK time
+  workflow_dispatch:          # add a manual “Run” button
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run the sync script
+        run: |
+          pip install requests
+          python veeqo_to_xero.py
+        env:
+          VEEQO_API_KEY:      ${{ secrets.VEEQO_API_KEY }}
+          XERO_CLIENT_ID:     ${{ secrets.XERO_CLIENT_ID }}
+          XERO_CLIENT_SECRET: ${{ secrets.XERO_CLIENT_SECRET }}
+          XERO_TENANT_ID:     ${{ secrets.XERO_TENANT_ID }}
