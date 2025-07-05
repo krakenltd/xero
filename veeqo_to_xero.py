@@ -25,10 +25,18 @@ if not tenant_id:
 hdrs = {"x-api-key": os.environ["VEEQO_API_KEY"], "accept": "application/json"}
 total = decimal.Decimal("0")
 url = "https://api.veeqo.com/products?per_page=200&page=1"
+
+def safe_decimal(val):
+    """Return Decimal(val) or 0 if val is None/empty/invalid."""
+    try:
+        return decimal.Decimal(str(val))
+    except (decimal.InvalidOperation, TypeError, ValueError):
+        return decimal.Decimal("0")
+
 while url:
     r = requests.get(url, headers=hdrs)
     data = r.json()
-    total += sum(decimal.Decimal(str(p["on_hand_value"])) for p in data)
+    total += sum(safe_decimal(p.get("on_hand_value")) for p in data)
     url = r.links.get("next", {}).get("url")
     time.sleep(0.3)  # stay under Veeqo’s rate limit
 
