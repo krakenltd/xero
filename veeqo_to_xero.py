@@ -38,6 +38,7 @@ url = "https://api.veeqo.com/products?per_page=200&page=1"
 while url:
     resp = requests.get(url, headers=hdrs)
     resp.raise_for_status()
+    print(f"[DEBUG] headers for {url} →", dict(resp.headers))
     page = resp.json()
 
     # ---- DEBUG: show how many products parsed on this page
