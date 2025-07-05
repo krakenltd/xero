@@ -37,21 +37,30 @@ def safe_decimal(v):
         return Decimal("0")
 
 def diy_location_value(location_id):
-    """Sum cost_price × physical_stock_level for one location."""
+    """Sum warehouse value for one location, skipping zero / missing entries."""
     total_loc = Decimal("0")
-    url = "https://api.veeqo.com/products?per_page=200&page=1"
+    url = "https://api.veeqo.com/products?per_page=200&page=1&include[]=stock"
     while url:
         resp = requests.get(url, headers=hdrs)
         resp.raise_for_status()
         for p in resp.json():
             cost = safe_decimal(p.get("cost_price") or 0)
             loc = p.get("stock", {}).get(str(location_id)) or p.get("stock", {}).get(location_id)
-            if loc:
-                if "on_hand_value" in loc and loc["on_hand_value"] is not None:
-                    total_loc += safe_decimal(loc["on_hand_value"])
-                else:
-                    qty = safe_decimal(loc.get("physical_stock_level") or 0)
-                    total_loc += cost * qty
+            if not loc:
+                continue
+
+            # 1. Prefer explicit warehouse stock value
+            if loc.get("stock_value") not in (None, "", 0, "0", "0.0"):
+                total_loc += safe_decimal(loc["stock_value"])
+                continue
+            if loc.get("on_hand_value") not in (None, "", 0, "0", "0.0"):
+                total_loc += safe_decimal(loc["on_hand_value"])
+                continue
+
+            # 2. Fallback: cost_price × physical_stock_level (only if cost>0)
+            qty = safe_decimal(loc.get("physical_stock_level") or 0)
+            if cost > 0 and qty > 0:
+                total_loc += cost * qty
         url = resp.links.get("next", {}).get("url")
         time.sleep(0.3)
     return total_loc
