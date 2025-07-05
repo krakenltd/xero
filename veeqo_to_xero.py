@@ -21,33 +21,44 @@ if not tenant_id:
         headers={"Authorization": f"Bearer {access_token}"},
     ).json()[0]["tenantId"]
 
-# ---------- 3. Get total stock value from Veeqo ----------
-import decimal, requests, time, os
+# ---------- 3. Compute total stock value across ALL locations ----------
+from decimal import Decimal, InvalidOperation
 
-def fetch_stock_value():
-    resp = requests.get(
-        "https://api.veeqo.com/reports/inventory_value",
-        headers={
-            "x-api-key": os.environ["VEEQO_API_KEY"],
-            "accept": "application/json",
-        },
-    ).json()
+def safe_decimal(v):
+    try:
+        return Decimal(str(v))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0")
 
-    # Format 1:  {"total_stock_value": "9883.61", ...}
-    if "total_stock_value" in resp:
-        return decimal.Decimal(str(resp["total_stock_value"]))
+total = Decimal("0")
+url = "https://api.veeqo.com/products?per_page=200&page=1"
+headers = {
+    "x-api-key": os.environ["VEEQO_API_KEY"],
+    "accept": "application/json",
+}
 
-    # Format 2: {"data":[{"stock_value":"7888.81", ...}, ...]}
-    if "data" in resp and isinstance(resp["data"], list):
-        return sum(
-            decimal.Decimal(str(loc.get("stock_value") or 0))
-            for loc in resp["data"]
-        )
+while url:
+    resp = requests.get(url, headers=headers)
+    data = resp.json()
 
-    # Fallback – raise a helpful error
-    raise ValueError(f"Unexpected Veeqo report structure: {resp}")
+    for p in data:
+        cost = safe_decimal(p.get("cost_price") or 0)
 
-total = fetch_stock_value()
+        # p["stock"] is a dict: {location_id: {...}, ...}
+        for loc in p.get("stock", {}).values():
+            # Most accounts expose one of these keys:
+            if "on_hand_value" in loc and loc["on_hand_value"] is not None:
+                total += safe_decimal(loc["on_hand_value"])
+            elif "stock_value" in loc and loc["stock_value"] is not None:
+                total += safe_decimal(loc["stock_value"])
+            else:
+                qty = safe_decimal(loc.get("physical_stock_level") or 0)
+                total += cost * qty
+
+    # follow the “next” link if pagination header is present
+    url = resp.links.get("next", {}).get("url")
+    time.sleep(0.3)            # stay well inside Veeqo’s 5-req/sec limit
+
 
 # ---------- 4. Post the Manual Journal to Xero ----------
 today = time.strftime("%Y-%m-%d")
