@@ -1,6 +1,7 @@
-import os, requests, decimal, time
+import os, requests, time
+from decimal import Decimal, InvalidOperation
 
-# ---------- 1. Get a 30-min access token from Xero ----------
+# ---------- 1.  Get a 30-min Xero access-token (client-credentials flow) ----------
 token = requests.post(
     "https://identity.xero.com/connect/token",
     headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -13,7 +14,7 @@ token = requests.post(
 ).json()
 access_token = token["access_token"]
 
-# ---------- 2. Find tenant ID (unless you stored it) ----------
+# ---------- 2.  Tenant ID (read secret or fetch once) ----------
 tenant_id = os.getenv("XERO_TENANT_ID")
 if not tenant_id:
     tenant_id = requests.get(
@@ -21,9 +22,7 @@ if not tenant_id:
         headers={"Authorization": f"Bearer {access_token}"},
     ).json()[0]["tenantId"]
 
-# ---------- 3. Compute total stock value across ALL locations ----------
-from decimal import Decimal, InvalidOperation
-
+# ---------- 3.  Total stock value across ALL Veeqo locations ----------
 def safe_decimal(v):
     try:
         return Decimal(str(v))
@@ -31,57 +30,55 @@ def safe_decimal(v):
         return Decimal("0")
 
 total = Decimal("0")
-url = "https://api.veeqo.com/products?per_page=200&page=1"
-headers = {
+location_ids = os.environ["VEEQO_LOCATION_IDS"].split(",")  # e.g. "328835,124495"
+
+hdrs = {
     "x-api-key": os.environ["VEEQO_API_KEY"],
     "accept": "application/json",
 }
 
-while url:
-    resp = requests.get(url, headers=headers)
-    data = resp.json()
+for loc_id in location_ids:
+    url = f"https://api.veeqo.com/reports/inventory_value?location_id={loc_id}"
+    r = requests.get(url, headers=hdrs)
+    if r.status_code == 404:
+        raise RuntimeError(f"Inventory report not enabled for location {loc_id}")
+    data = r.json()  # format may vary by account
 
-    for p in data:
-        cost = safe_decimal(p.get("cost_price") or 0)
+    if "stock_value" in data:
+        total += safe_decimal(data["stock_value"])
+    elif "total_stock_value" in data:
+        total += safe_decimal(data["total_stock_value"])
+    else:
+        raise RuntimeError(f"Unexpected structure for location {loc_id}: {data}")
 
-        # p["stock"] is a dict: {location_id: {...}, ...}
-        for loc in p.get("stock", {}).values():
-            # Most accounts expose one of these keys:
-            if "on_hand_value" in loc and loc["on_hand_value"] is not None:
-                total += safe_decimal(loc["on_hand_value"])
-            elif "stock_value" in loc and loc["stock_value"] is not None:
-                total += safe_decimal(loc["stock_value"])
-            else:
-                qty = safe_decimal(loc.get("physical_stock_level") or 0)
-                total += cost * qty
+print(f"Total inventory across all locations = £{total}")
 
-    # follow the “next” link if pagination header is present
-    url = resp.links.get("next", {}).get("url")
-    time.sleep(0.3)            # stay well inside Veeqo’s 5-req/sec limit
+# ---------- 4.  Abort if value is zero (prevents empty journal) ----------
+if total == Decimal("0"):
+    print("Inventory total is £0 – no journal posted.")
+    raise SystemExit(0)
 
-
-# ---------- 4. Post the Manual Journal to Xero ----------
+# ---------- 5.  Post the Manual Journal to Xero ----------
 today = time.strftime("%Y-%m-%d")
 journal = {
     "Narration": "Daily Veeqo stock revaluation",
     "Date": today,
     "Status": "POSTED",
     "JournalLines": [
-        {"AccountCode": "320", "LineAmount": float(total)},   # debit Stock-on-Hand
-        {"AccountCode": "630", "LineAmount": float(-total)},  # credit Adjustment
+        {"AccountCode": "320", "LineAmount": float(total)},    # debit Stock-on-Hand
+        {"AccountCode": "630", "LineAmount": float(-total)},   # credit Adjustment
     ],
 }
-req_hdrs = {
-    "Authorization": f"Bearer {access_token}",
-    "xero-tenant-id": tenant_id,
-    "Accept": "application/json",
-}
+
 resp = requests.post(
     "https://api.xero.com/api.xro/2.0/ManualJournals",
-    headers=req_hdrs,
+    headers={
+        "Authorization": f"Bearer {access_token}",
+        "xero-tenant-id": tenant_id,
+        "Accept": "application/json",
+    },
     json=journal,
 )
-print("Xero reply:", resp.status_code, resp.text)   # <-- add this
-resp.raise_for_status()                             # keep this
-
-print(f"Posted £{total} to Xero")
+print("Xero reply:", resp.status_code, resp.text)
+resp.raise_for_status()
+print(f"Posted £{total} to Xero ✔️")
