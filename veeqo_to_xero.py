@@ -56,10 +56,12 @@ req_hdrs = {
     "xero-tenant-id": tenant_id,
     "Accept": "application/json",
 }
-requests.post(
+resp = requests.post(
     "https://api.xero.com/api.xro/2.0/ManualJournals",
     headers=req_hdrs,
     json=journal,
-).raise_for_status()
+)
+print("Xero reply:", resp.status_code, resp.text)   # <-- add this
+resp.raise_for_status()                             # keep this
 
 print(f"Posted £{total} to Xero")
