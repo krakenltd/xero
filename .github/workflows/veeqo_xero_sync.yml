@@ -25,3 +25,5 @@ jobs:
           XERO_CLIENT_ID:     ${{ secrets.XERO_CLIENT_ID }}
           XERO_CLIENT_SECRET: ${{ secrets.XERO_CLIENT_SECRET }}
           XERO_TENANT_ID:     ${{ secrets.XERO_TENANT_ID }}
+          VEEQO_LOCATION_IDS: ${{ secrets.VEEQO_LOCATION_IDS }}   # ← keep this line
+
