@@ -48,7 +48,7 @@ journal = {
     "Status": "POSTED",
     "JournalLines": [
         {"AccountCode": "320", "LineAmount": float(total)},   # debit Stock-on-Hand
-        {"AccountCode": "999", "LineAmount": float(-total)},  # credit Adjustment
+        {"AccountCode": "630", "LineAmount": float(-total)},  # credit Adjustment
     ],
 }
 req_hdrs = {
