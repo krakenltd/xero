@@ -35,7 +35,7 @@ def safe_decimal(v):
 
 def value_for_location(location_id: str) -> Decimal:
     total_loc = Decimal("0")
-    url = f"https://api.veeqo.com/stock_entries?warehouse_id={location_id}&per_page=200&page=1"
+    url = f"https://api.veeqo.com/warehouses/{location_id}/stock_entries?per_page=200&page=1"
     while url:
         resp = requests.get(url, headers=hdrs)
         resp.raise_for_status()
