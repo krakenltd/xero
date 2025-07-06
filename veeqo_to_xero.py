@@ -1,14 +1,14 @@
 import os, requests, time
 from decimal import Decimal, InvalidOperation
 
-# ---------- 1.  Get a 30-min Xero access-token ----------
+# ---------- 1.  Xero access token (client-credentials flow) ----------
 token = requests.post(
     "https://identity.xero.com/connect/token",
     headers={"Content-Type": "application/x-www-form-urlencoded"},
     data={
-        "grant_type": "client_credentials",
-        "scope": "accounting.transactions accounting.journals.read",
-        "client_id": os.environ["XERO_CLIENT_ID"],
+        "grant_type":    "client_credentials",
+        "scope":         "accounting.transactions accounting.journals.read",
+        "client_id":     os.environ["XERO_CLIENT_ID"],
         "client_secret": os.environ["XERO_CLIENT_SECRET"],
     },
 ).json()
@@ -20,63 +20,64 @@ tenant_id = os.getenv("XERO_TENANT_ID") or requests.get(
     headers={"Authorization": f"Bearer {access_token}"},
 ).json()[0]["tenantId"]
 
-# ---------- 3.  Total stock value  = Σ(cost_price × qty_all_warehouses) ----------
+# ---------- 3.  Pull every product & sum cost × qty ----------
 hdrs = {
     "x-api-key": os.environ["VEEQO_API_KEY"],
     "accept":    "application/json",
 }
 
-def safe_decimal(v):
+def d(val):                 # safe Decimal
     try:
-        return Decimal(str(v))
+        return Decimal(str(val))
     except (InvalidOperation, TypeError, ValueError):
         return Decimal("0")
 
 total = Decimal("0")
-page = 1
+page  = 1
 while True:
     url = f"https://api.veeqo.com/products?per_page=200&page={page}"
     resp = requests.get(url, headers=hdrs)
     resp.raise_for_status()
 
-    # ---- DEBUG: show page / count ----
-    headers = resp.headers
-    total_pages = int(headers.get("X-Total-Pages-Count", 1))
-    print(f"[DEBUG] page {page}/{total_pages}  products on page → {len(resp.json())}")
-
+    tot_pages = int(resp.headers.get("X-Total-Pages-Count", 1))
     for product in resp.json():
-        for variant in product.get("sellables", []):
-            cost = safe_decimal(variant.get("cost_price") or 0)
-            qty  = safe_decimal(
-                variant.get("inventory", {})
-                       .get("physical_stock_level_at_all_warehouses", 0)
-            )
+        for v in product.get("sellables", []):
+            cost = d(v.get("cost_price"))
+            qty  = d(v.get("inventory", {}).get(
+                     "physical_stock_level_at_all_warehouses", 0))
             if cost > 0 and qty > 0:
                 total += cost * qty
 
-    if page >= total_pages:
+    if page >= tot_pages:
         break
     page += 1
-    time.sleep(0.3)        # stay below rate-limit
-
-print(f"Total inventory across all warehouses = £{total}")
+    time.sleep(0.3)  # stay below rate limit
 
 if total == 0:
     print("Inventory total is £0 – no journal posted.")
     raise SystemExit(0)
 
-# ---------- 4a. Void yesterday’s copy of this journal (if it exists) ----------
-search = requests.get(
+print(f"Total inventory across all warehouses = £{total}")
+
+# ---------- 4.  Ensure only ONE journal for today ----------
+today = time.strftime("%Y-%m-%d")
+
+old = requests.get(
     "https://api.xero.com/api.xro/2.0/ManualJournals",
     headers={
         "Authorization": f"Bearer {access_token}",
         "xero-tenant-id": tenant_id,
         "Accept": "application/json",
     },
-    params={"where": f'Date==DateTime({today})&&Narration=="Daily Veeqo stock revaluation"'}
+    params={
+        "where": (
+            f'Date==DateTime({today}) '
+            f'&& Narration=="Daily Veeqo stock revaluation"'
+        )
+    },
 ).json()
 
-for mj in search.get("ManualJournals", []):
+for mj in old.get("ManualJournals", []):
     jid = mj["ManualJournalID"]
     requests.post(
         f"https://api.xero.com/api.xro/2.0/ManualJournals/{jid}",
@@ -85,20 +86,18 @@ for mj in search.get("ManualJournals", []):
             "xero-tenant-id": tenant_id,
             "Accept": "application/json",
         },
-        json={"Status": "VOIDED"}
+        json={"Status": "VOIDED"},
     )
 
-
-# ---------- 4.  Post the Manual Journal to Xero ----------
-today = time.strftime("%Y-%m-%d")
+# ---------- 5.  Post today’s journal ----------
 journal = {
     "Narration": "Daily Veeqo stock revaluation",
-    "Date": today,
-    "Status": "POSTED",
+    "Date":      today,
+    "Status":    "POSTED",
     "JournalLines": [
-    {"AccountCode": "630", "LineAmount":  float(total)},   # debit Stock-on-Hand
-    {"AccountCode": "999", "LineAmount": -float(total)},   # credit Inventory Adj.
-],
+        {"AccountCode": "630", "LineAmount":  float(total)},   # debit Inventory
+        {"AccountCode": "999", "LineAmount": -float(total)},   # credit Adjustment
+    ],
 }
 
 resp = requests.post(
