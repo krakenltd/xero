@@ -59,6 +59,36 @@ if total == 0:
 
 print(f"Total inventory across all warehouses = £{total}")
 
+# ---------- 4a. Void the latest revaluation journal (if any) ----------
+search = requests.get(
+    "https://api.xero.com/api.xro/2.0/ManualJournals",
+    headers={
+        "Authorization": f"Bearer {access_token}",
+        "xero-tenant-id": tenant_id,
+        "Accept": "application/json",
+    },
+    params={
+        "where": 'Narration=="Daily Veeqo stock revaluation" && Status=="POSTED"',
+        "order": "UpdatedDateUTC DESC",  # newest first
+        "page": 1,
+    },
+).json()
+
+if search.get("ManualJournals"):
+    last_id = search["ManualJournals"][0]["ManualJournalID"]
+    print(f"[INFO] Voiding previous journal {last_id}")
+    requests.post(
+        f"https://api.xero.com/api.xro/2.0/ManualJournals/{last_id}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "xero-tenant-id": tenant_id,
+            "Accept": "application/json",
+        },
+        json={"Status": "VOIDED"},
+    )
+else:
+    print("[INFO] No prior revaluation journal found")
+
 # ---------- 4.  Ensure only ONE journal for today ----------
 today = time.strftime("%Y-%m-%d")
 
